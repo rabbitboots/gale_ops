@@ -66,7 +66,7 @@ GaleOps reads the `GaleX200` file format. Support for older formats is not yet i
 
 As a LÖVE library, only being able to read files directly from disk isn't the best design choice. This was originally a Python script, and some aspects of that original design have carried over.
 
-Beyond that, I toyed with the idea of allowing the library user to load only specific layers from a Gale image. In theory, if the user was only interested in one specific layer, this would cut down on processing time. In practice, it's unnecessary and overcomplicated, as most Gale images aren't very big. It also prevents users from loading Gale images that are embedded in other data.
+Beyond that, I toyed with the idea of allowing the library user to load only specific layers from a Gale image. In theory, if the user was only interested in one specific layer, this would cut down on processing time. In practice, it's unnecessary and overcomplicated, as most Gale images aren't *that* big. It also prevents users from loading Gale images that are embedded in other data.
 
 Loading a Gale image generates a fair bit of garbage: two binary strings for every data block (one compressed, one uncompressed). This isn't ideal, and a LÖVE-specific alternative should probably be investigated. My own use case is to convert Gale images to PNG as part of a build system, so that isn't a huge deal for me personally, but you probably wouldn't want to frequently load and unload Gale images in a game at run-time.
 
