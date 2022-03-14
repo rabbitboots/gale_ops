@@ -1,4 +1,4 @@
-local path = (...):gsub("%.[^%.]+$", "")
+local path = ... and (...):match("(.-)[^%.]+$") or ""
 -- Module: GaleConv
 -- Description: Some example wrappers for working with GaleOps.
 -- Version: 1.0
