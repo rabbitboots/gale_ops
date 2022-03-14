@@ -51,7 +51,7 @@ GaleOps reads the `GaleX200` file format. Support for older formats is not yet i
 
 ## Other Limitations and Probably-Won't-Fix's:
 
-* LÖVE ImageData objects don't support indexed palettes, so it's not possible to directly pass that info to converted ImageData objects. For indexed images, you can grab per-frame palettes from the GaleFrame tables.
+* LÖVE ImageData doesn't support indexed palettes, so it's not possible to directly pass that info to converted ImageData objects. For indexed images, you can grab per-frame palettes from the GaleFrame tables.
 
 * BGColor is stored in the converted GaleImage table, but not used in `getPixel()`. You can use `galeOps.makeImageDataBGColor()` to make an ImageData filled with the background color.
 
