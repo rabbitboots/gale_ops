@@ -42,11 +42,6 @@ function love.load(arguments)
 	love.graphics.setDefaultFilter("nearest", "nearest")
 	love.graphics.setBackgroundColor(0.2, 0.5, 0.3, 1.0)	
 
-	-- Run test scripts for submodules
-	if arguments[1] == "--test" then
-		local lib = require(arguments[2])
-	end
-
 	-- For demonstration purposes, we will load a multi-frame, multi-layer Gale file and play it back as a series of images.
 	local gal_path = "joggers.gal"
 
