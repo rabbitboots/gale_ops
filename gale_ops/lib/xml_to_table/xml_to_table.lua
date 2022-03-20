@@ -1,7 +1,7 @@
 local path = ... and (...):match("(.-)[^%.]+$") or ""
 
 local xmlToTable = {
-	_VERSION = "1.0.0",
+	_VERSION = "1.0.1",
 	_URL = "https://github.com/rabbitboots/xml_to_table",
 	_DESCRIPTION = "Converts a subset of XML to a Lua table.",
 	_LICENSE = [[
@@ -317,7 +317,8 @@ end
 
 
 local function validateXMLName(self, name)
-	for i = 1, #name do
+	local i = 1
+	while i < #name do
 		local u8_unit, u8_err = utf8Tools.getCodeUnit(name, i)
 		if not u8_unit then
 			self:errorHalt("failed to read character #" .. i .. " in XML Name: " .. u8_err)
@@ -336,6 +337,8 @@ local function validateXMLName(self, name)
 				self:errorHalt("invalid character #" .. i .. " in XML Name")
 			end
 		end
+
+		i = i + #u8_unit
 	end
 end
 
