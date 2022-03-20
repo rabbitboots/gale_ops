@@ -1,9 +1,8 @@
--- Prerelease -- 2022-03-13
 local path = ... and (...):match("(.-)[^%.]+$") or ""
 
 local xmlToTable = {
-	_VERSION = "0.9.4", -- prerelease version, packaged with galeOps
-	--_URL = "n/a: pending initial release",
+	_VERSION = "1.0.0",
+	_URL = "https://github.com/rabbitboots/xml_to_table",
 	_DESCRIPTION = "Converts a subset of XML to a Lua table.",
 	_LICENSE = [[
 	Copyright (c) 2022 RBTS
@@ -29,18 +28,7 @@ local xmlToTable = {
 }
 
 --[[
-	* Notes *
-
-	* UTF-16 encoding is not supported yet. (The spec mandates it.)
-
-	* The XML Declaration is parsed, but the parser doesn't actually do anything
-	with the info yet.
-
-	* DTDs (!DOCTYPE) tags are not implemented yet. The parser will throw an error
-	upon encountering this tag.
-
-	* This file should cooperate with 'strict.lua', a common Lua troubleshooting
-	snippet / library.
+	This file should cooperate with 'strict.lua', a common Lua troubleshooting snippet / library.
 --]]
 
 -- Submodules
@@ -67,10 +55,15 @@ options.prepass.doc_check_nul = true
 -- Check entire XML string for code points that are not supported per the spec.
 options.prepass.doc_check_xml_unsupported_chars = true
 
+-- Convert '\r\n' and '\r' to '\n', per the spec. You may disable this if you control the incoming
+-- XML strings, and know for a fact that they are already normalized. (Doing this in Lua may
+-- generate up to two temporary versions of the XML document string.)
+options.prepass.normalize_end_of_line = true
+
 -- Confirm that XML Names conform to the characters in 'lut_name_start_char' and 'lut_name_char'.
 options.validate_names = true
 
--- Fail on duplicate attribute delcarations within an element.
+-- Fail on duplicate attribute declarations within an element.
 -- (The spec forbids this.)
 options.check_dupe_attribs = true
 
@@ -79,7 +72,7 @@ options.check_dupe_attribs = true
 options.ignore_bad_escapes = false
 
 -- Keep character data entities which are comprised solely of whitespace between element tags
-options.keep_insignificant_whitespace = false
+options.keep_insignificant_whitespace = false -- XXX this may not be working correctly.
 
 
 -- Lookup Tables and Patterns
@@ -125,7 +118,13 @@ local function checkRangeLUT(lut, value)
 end
 
 
-local lut_attrib_escape = {["<"] = "lt", [">"] = "gt", ["&"] = "amp", ["\""] = "quot", ["'"] = "apos"}
+local lut_attrib_escape = {
+	["<"] = "lt",
+	[">"] = "gt",
+	["&"] = "amp",
+	["\""] = "quot",
+	["'"] = "apos"
+}
 -- "&#n;", where 'n' is a series of 0-9 digits
 -- "&#xn;", where 'n' is a series of 0-f hex values
 local lut_attrib_reverse = makeInverseLUT(lut_attrib_escape)
@@ -173,21 +172,6 @@ local lut_name_char = {
 	{0x203F, 0x2040},
 }
 
-
-local xml_defs = {}
-xml_defs.comment_start = "(^<!%-%-)"
-
-xml_defs.pi_end = "^(%?>)"
-xml_defs.tag_close_start = "^(</"
-xml_defs.tag_start = "^(<)"
-
-xml_defs.name = "^([^%s=\"'<>/&]+)"
-
-xml_defs.decl_version_info = "^%s+version"
-xml_defs.decl_version_num = "^([\"'])(1%.[0-9]+)%1"
-xml_defs.decl_encoding = "^%s+encoding"
-xml_defs.decl_standalone = "^%s+standalone"
-
 -- / Lookup Tables and Patterns
 
 local function indent(reps)
@@ -232,9 +216,20 @@ local function _unescape(chunk)
 end
 
 
+--- Normalize whitespace characters (0x20, 0xD, 0xA, 0x9) to 0x20 (" ")
+local function normalizeAttribWhitespace(str)
+	-- https://www.w3.org/TR/REC-xml/#AVNormalize
+	return string.gsub(str, "[\x20\x0D\x0A\x09]", "\x20")
+end
+
+
 local function unescapeXMLString(sub_str)
-	local seq = {}
-	local i, j, chunk = 1, 0, nil
+	if string.match(sub_str, "<") then
+		return false, "'<' literal is not allowed in quoted values."
+	end
+
+	-- Convert whitespace symbols to 0x20 (" ")
+	sub_str = normalizeAttribWhitespace(sub_str)
 
 	-- Prepass: if no ampersands, just return the original string without going through
 	-- the trouble of table.concat().
@@ -242,19 +237,22 @@ local function unescapeXMLString(sub_str)
 		return sub_str
 	end
 
+	local seq = {}
+	local i, j, chunk = 1, 0, nil
+
 	while true do
 		local last_pos = i
 		i, j = string.find(sub_str, "&", j + 1)
 
 		-- End of string
 		if not i then
-			table.insert(seq, string.sub(last_pos, #sub_str))
+			table.insert(seq, string.sub(sub_str, last_pos, #sub_str))
 			break
 		end
 
 		local pos_amp = i
 
-		i, j, chunk = string.find(sub_str, "(.-);", j + 1)
+		i, j, chunk = string.find(sub_str, "^(.-);", j + 1)
 		if not i then
 			return false, "couldn't parse escape sequence: found '&' without closing ';'"
 		end
@@ -292,12 +290,14 @@ end
 
 local function stepEq(self)
 	self:ws()
-	self:fetchReq("^=", "failed to parse eq (=) separating key-value pair")
+	self:fetchReq("^=", false, "failed to parse eq (=) separating key-value pair")
 	self:ws()
 end
 
-
-local function getQuoted(self, err_reason)
+local function getAttribQuoted(self, err_reason)
+	--[[
+	NOTE: illegal use of the '<' literal appearing in quoted text is checked in unescapeXMLString().
+	--]]
 	self:cap("^([\"'])(.-)%1")
 	local in_quotes = self.c[2]
 	self:clearCaptures()
@@ -341,13 +341,13 @@ end
 
 
 local function getXMLName(self, err)
-	local name = self:fetch(xml_defs.name)
+	local name = self:fetch("^([^%s=\"'<>/&]+)")
 
 	if name and options.validate_names then
 		validateXMLName(self, name)
 
 	-- If 'err' was populated, throw an error. Silently ignore match failure otherwise.
-	elseif err then
+	elseif not name then
 		self:errorHalt(err)
 	end
 
@@ -365,32 +365,32 @@ local function getXMLDecl(self, xml_state, pos_initial)
 
 	local version_num, encoding_val, standalone_val
 
-	self:fetchReq(xml_defs.decl_version_info, "couldn't read xmlDecl mandatory version identifier")
+	self:fetchReq("^%s+version", false, "couldn't read xmlDecl mandatory version identifier")
 	stepEq(self)
 
-	self:capReq(xml_defs.decl_version_num, "couldn't read xmlDecl version value")
+	self:capReq("^([\"'])(1%.[0-9]+)%1", "couldn't read xmlDecl version value")
 	version_num = self.c[2]
 
-	if self:fetch(xml_defs.decl_encoding) then
+	if self:fetch("^%s+encoding") then
 		stepEq(self)
-		encoding_val = getQuoted(self, "couldn't read xmlDecl encoding value")
+		encoding_val = getAttribQuoted(self, "couldn't read xmlDecl encoding value")
 	end
 
-	if self:fetch(xml_defs.decl_standalone) then
+	if self:fetch("^%s+standalone") then
 		stepEq(self)
-		standalone_val = getQuoted(self, "couldn't read xmlDecl standalone value")
+		standalone_val = getAttribQuoted(self, "couldn't read xmlDecl standalone value")
 	end
 
-	self:fetchReq(xml_defs.pi_end, "couldn't find xmlDecl closing '?>'")
+	self:fetchReq("^(%?>)", false, "couldn't find xmlDecl closing '?>'")
 
-	local entity = {}
-	entity.id = "xml_decl"
-	entity.decl_version = version_num
-	entity.decl_encoding = encoding_val
-	entity.decl_standalone = standalone_val
+	local decl = {}
+	decl.id = "xml_decl"
+	decl.version = version_num
+	decl.encoding = encoding_val
+	decl.standalone = standalone_val
 	-- no metatable
 
-	return entity
+	return decl
 end
 
 
@@ -399,19 +399,21 @@ local function getXMLComment(self, xml_state)
 	-- Find the comment close and collect an exclusive substring
 	local pos_start = self.pos
 
-	self:fetchReq("%-%-", "couldn't find closing '--'")
-	self:fetchReq("^>", "couldn't find '>' to go with closing '--'")
+	self:fetchReq("%-%-", false, "couldn't find closing '--'")
+	self:fetchReq("^>", false, "couldn't find '>' to go with closing '--'")
 
 	local pos_end = self.pos - 4
 
+	--[[
 	local entity = {}
 	entity.id = "comment"
-	entity.data = string.sub(self.str, pos_start, pos_end)
+	entity.text = string.sub(self.str, pos_start, pos_end)
 	-- no metatable
 
 	-- Don't escape comments
 
 	return entity
+	--]]
 end
 
 
@@ -420,15 +422,15 @@ local function getXMLProcessingInstruction(self, xml_state)
 
 	-- Find the PI close and collect an exclusive substring
 	local pos_start = self.pos
-	self:fetchReq("%?>", "failed to locate PI tag close ('?>')")
+	self:fetchReq("%?>", false, "failed to locate PI tag close ('?>')")
 
-	local pos_end = self.pos - 2
+	local pos_end = self.pos - 3
 
 	local entity = {}
 	entity.id = "pi"
 	entity.name = pi_name
-	entity.data = string.sub(self.str, pos_start, pos_end)
-	-- no metatable
+	entity.text = string.sub(self.str, pos_start, pos_end)
+	setmetatable(entity, xmlObj._mt_pi)
 
 	-- Don't escape PI contents.
 	-- Application is responsible for parsing this, basically.
@@ -459,7 +461,7 @@ local function getXMLElement(self, xml_state)
 	local attribs = {}
 	local attribs_hash = {}
 	local is_empty_tag = false
-	
+
 	if self:lit(">") then
 		-- Just eat the char
 
@@ -488,7 +490,7 @@ local function getXMLElement(self, xml_state)
 				self:errorHalt("duplicate element attribute key")
 			end
 			stepEq(self)
-			local a_val = getQuoted(self, "fetching element quoted attribute value failed")
+			local a_val = getAttribQuoted(self, "fetching element quoted attribute value failed")
 
 			local attrib = {}
 
@@ -497,11 +499,11 @@ local function getXMLElement(self, xml_state)
 
 			table.insert(attribs, attrib)
 			attribs_hash[a_name] = #attribs
-			
+
 			self:ws()
 		end
 	end
-	
+
 	local entity = {}
 	entity.id = "element"
 	entity.name = element_name
@@ -523,34 +525,44 @@ local function getXMLCharacterData(self, xml_state)
 	-- way to escape characters that otherwise don't play well with XML, I have opted to
 	-- combine them into one text entity.
 	while true do
+		-- CDATA sections
 		if self:lit("<![CDATA[") then
 			local pos_start = self.pos
 			-- Find closing CDATA tag.
-			self:fetchReq("%]%]>", "couldn't find closing CDATA tag")
+			self:fetchReq("%]%]>", false, "couldn't find closing CDATA tag")
 			local pos_end = self.pos - 3
 
 			-- Don't escape CDATA Sections.
 			table.insert(con_t, string.sub(self.str, pos_start, pos_end))
 			break
 
+		-- Normal Character Data sections
 		else
 			local pos_start = self.pos
 			local pos_end
 			-- Need some special handling to account for whitespace following the end of the
 			-- root element (which is permitted) versus non-ws pcdata (which is disallowed)
 			if not xml_state.doc_close then
-				self:fetchReq("<", "Couldn't find '<' that ends character data")
+				self:fetchReq("<", false, "Couldn't find '<' that ends character data")
 				self.pos = self.pos - 1
 				pos_end = self.pos - 1
 
 			else
-				if self:fetchOrEOS("<") then
+				if self:fetch("<") then
 					self.pos = self.pos - 1
+				else
+					self:goEOS()
 				end
 				pos_end = self.pos - 1
 			end
 
-			local str_esc, esc_err = unescapeXMLString(string.sub(self.str, pos_start, pos_end))
+			local temp_str = string.sub(self.str, pos_start, pos_end)
+			-- https://www.w3.org/TR/REC-xml/#syntax
+			if string.match(temp_str, "%]%]>") then
+				self:errorHalt("the sequence ']]>' is not permitted in plain character data")
+			end
+
+			local str_esc, esc_err = unescapeXMLString(temp_str)
 			if esc_err then
 				self:errorHalt(esc_err)
 			end
@@ -605,7 +617,7 @@ local function handleXMLCharacterData(self, xml_state, top, entity)
 end
 
 
-function xmlToTable._parseLoop(self, xml_state, stack)
+local function _parseLoop(self, xml_state, stack)
 
 	while true do
 		xml_state.label:push("_parseLoop")
@@ -730,12 +742,12 @@ function xmlToTable._parseLoop(self, xml_state, stack)
 	end
 end
 
--- Public Functions
 
-function _parsePrepass(str)
+local function _parsePrepass(str)
 	_assertArgType(1, str, "string")
 
 	local err_pre = "XML prepass failure: "
+
 	--[[
 	Main Loop: UTF-8 Code Units
 	Aux Loop: Individual bytes -- only runs if one of the associated options are active
@@ -786,12 +798,37 @@ function _parsePrepass(str)
 		i = i + #u8_code
 	end
 
-	return true
+	--[[
+	The spec mandates that all instances of "\r\n" (0xd, 0xa) and "\r" (0xd) be normalized to just \n (0xa).
+	As far as I can tell, this includes CDATA sections.
+	-- https://www.w3.org/TR/REC-xml/#sec-line-ends
+	--]]
+	if options.prepass.normalize_end_of_line then
+		str = string.gsub(str, "\x0D\x0A", "\x0A")
+		str = string.gsub(str, "\x0D", "\x0A")
+	end
+
+	return str
 end
 
+-- Public Functions
 
 function xmlToTable.convert(str)
 	_assertArgType(1, str, "string")
+
+	-- Only run the prepass if any checks are true.
+	if options.prepass then
+		for k, v in pairs(options.prepass) do
+			if v == true then
+				local err
+				str, err = _parsePrepass(str)
+				if not str then
+					error("XML prepass failed: " .. err)
+				end
+				break
+			end
+		end
+	end
 
 	local self = stringReader.new(str)
 
@@ -813,22 +850,12 @@ function xmlToTable.convert(str)
 
 	xml_state.label:push("Begin Parse")
 
-	-- Only run the prepass if any checks are true.
-	if options.prepass then
-		for k, v in pairs(options.prepass) do
-			if v == true then
-				_parsePrepass(str)
-				break
-			end
-		end
-	end
-
 	-- Skip leading whitespace
 	self:ws()
 
 	local stack = {xml_state}
 
-	xmlToTable._parseLoop(self, xml_state, stack)
+	_parseLoop(self, xml_state, stack)
 
 	if not xml_state.doc_root then
 		self:errorHalt("document root element not found") -- XXX might not ever trigger
@@ -847,50 +874,48 @@ function xmlToTable.convert(str)
 	return xml_state
 end
 
--- XXX Disabled for prerelease version to be bundled with galeOps.
---[=[
-local function _dumpTree(entity, seq, _depth)
-	for i, entity in ipairs(children) do
-		if depth > 0 then
-			table.insert(string.rep(" ", _depth))
-		end
+local function _indent(seq, level)
+	if level > 0 then
+		table.insert(seq, string.rep(" " , level))
+	end
+end
 
-		if entity.id == "element" then
-			table.insert(seq, "<" .. entity.name)
-			if #entity.attribs > 0 then
+local function _dumpTree(entity, seq, _depth)
+	for i, child in ipairs(entity.children) do
+		_indent(seq, _depth)
+
+		if child.id == "element" then
+			table.insert(seq, "<" .. child.name)
+			if #child.attribs > 0 then
 				table.insert(seq, " ")
-				for j, attrib in ipairs(entity.attribs) do
+				for j, attrib in ipairs(child.attribs) do
 					-- Switch quotes depending on attrib contents
 					local quote = "\""
 					if string.find(attrib.value, "\"") then
 						quote = "'"
 					end
 					table.insert(seq, attrib.name .. "=\"" .. attrib.value .. "\"")
-					if j < #entity.attribs then
+					if j < #child.attribs then
 						table.insert(seq, " ")
 					end
 				end
 			end
-			if #entity.children == 0 then
-				table.insert(seq, "/>\n")
+			if #child.children == 0 then
+				table.insert(seq, " />\n")
 
 			else
 				table.insert(seq, ">\n")
-				_dumpTree(entity, seq, _depth + 1)
-				table.insert(seq, "</" .. entity.name .. ">\n")
+				_dumpTree(child, seq, _depth + 1)
+				_indent(seq, _depth)
+				table.insert(seq, "</" .. child.name .. ">\n")
 			end
-		--[[
-		elseif entity.id == "comment" then
-			table.insert(seq, "<!--")
-			table.insert(seq, entity.data)
-			table.insert(seq, "-->\n")
-		--]]
-		elseif entity.id == "pi" then
-			table.insert(seq, "<?" .. entity.name .. " " .. entity.data .. "?>")
+
+		elseif child.id == "pi" then
+			table.insert(seq, "<?" .. child.name .. " " .. child.text .. "?>")
 			table.insert(seq, "\n")
 
-		elseif entity.id == "character_data" then
-			table.insert(seq, entity.text)
+		elseif child.id == "character_data" then
+			table.insert(seq, child.text)
 			table.insert(seq, "\n")
 
 		else
@@ -900,25 +925,27 @@ local function _dumpTree(entity, seq, _depth)
 end
 
 
+--- Dump a nested Lua table to the terminal, formatted like an XML string. NOTE: this is intended for debugging, and not guaranteed to generate valid XML. No processing is done on the table contents, so if you've made changes since the initial conversion, those will be passed through.
 function xmlToTable.dumpTree(entity)
 	_assertArgType(1, entity, "table")
 
 	local seq = {}
 
-	-- Handle stuff that is outside of the root element
+	-- Handle bits that are outside of the document root
 	if entity.id == "_parser_object_" then
-		if entity.decl then
+		local decl = entity.decl
+		if decl then
 			table.insert(seq, "<?xml")
-			if entity.decl_version then
-				table.insert(seq, " version=\"" .. entity.decl_version .. "\"")
+			if decl.version then
+				table.insert(seq, " version=\"" .. decl.version .. "\"")
 			end
-			if entity.decl_encoding then
-				table.insert(seq, " encoding=\"" .. entity.decl_encoding .. "\"")
+			if decl.encoding then
+				table.insert(seq, " encoding=\"" .. decl.encoding .. "\"")
 			end
-			if entity.decl_standalone then
-				table.insert(seq, " standalone=\"" .. entity.decl_standalone .. "\"")
+			if decl.standalone then
+				table.insert(seq, " standalone=\"" .. decl.standalone .. "\"")
 			end
-			table.insert(seq, "?>")
+			table.insert(seq, "?>\n")
 		end
 
 		if entity.doc_type then
@@ -932,7 +959,6 @@ function xmlToTable.dumpTree(entity)
 
 	return table.concat(seq)
 end
---]=]
 
 -- / Public Functions
 

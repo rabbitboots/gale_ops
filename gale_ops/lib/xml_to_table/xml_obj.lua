@@ -1,4 +1,3 @@
--- Prerelease -- 2022-03-13
 local path = ... and (...):match("(.-)[^%.]+$") or ""
 
 -- Object methods for xmlToTable.
@@ -32,47 +31,39 @@ local xmlShared = require(path .. "xml_shared")
 local _assertArgType = xmlShared.assertArgType
 local _assertArgNumGE = xmlShared.assertArgNumGE
 
--- Entity metatables
+-- Component metatables
+do
+	-- The parser root -- not part of the XML spec
+	local _mt_parser_root = {}
+	_mt_parser_root.__index = _mt_parser_root
+	xmlObj._mt_parser_root = _mt_parser_root
 
--- Elements
-local _mt_element = {}
-_mt_element.__index = _mt_element
-xmlObj._mt_element = _mt_element
+	local _mt_element = {}
+	_mt_element.__index = _mt_element
+	xmlObj._mt_element = _mt_element
 
-local _mt_parser_root = {}
-_mt_parser_root.__index = _mt_parser_root
-xmlObj._mt_parser_root = _mt_parser_root
+	local _mt_char_data = {}
+	_mt_char_data.__index = _mt_char_data
+	xmlObj._mt_char_data = _mt_char_data
 
-local _mt_parser_char_data = {}
-_mt_parser_char_data.__index = _mt_parser_char_data
-xmlObj._mt_parser_char_data = _mt_parser_char_data
+	local _mt_pi = {}
+	_mt_pi.__index = _mt_pi
+	xmlObj._mt_pi = _mt_pi
+end
 
 
-
--- XXX Consider removing. The same thing can be accomplished by setting 'options.keep_insignificant_whitespace' to false.
---[=[
---- Recursively delete all character data entities which contain only whitespace.
--- @param self The calling entity.
--- @return Nothing.
-local function _stripWhitespaceNodes(self)
-	-- Don't assert 'self'
-
-	for i = #self.children, 1, -1 do
-		local child = self.children[i]
-
-		if child.id == "character_data" then
-			if not string.find(child.text, "%S") then
-				table.remove(self.children, i)
-			end
-
-		elseif child.id == "element" then
-			child:stripWhitespaceNodes()
+--- Get the main document element from the parser root. (The method is to find the first element child of the parser root.)
+-- @return The document root entity, or nil if it can't be found. 
+local function _getRootElement(self)
+	for i, child in ipairs(self.children) do
+		if child.id == "element" then
+			return child
 		end
 	end
+	return nil
 end
-_mt_parser_root.stripWhitespaceNodes = _stripWhitespaceNodes
-_mt_element.stripWhitespaceNodes = _stripWhitespaceNodes
---]=]
+xmlObj._mt_parser_root.getRootElement = _getRootElement
+
 
 --- Get an attribute key="value" pair based on its key.
 -- @param The calling entity.
@@ -91,8 +82,8 @@ local function _getAttribute(self, key_id)
 
 	return nil
 end
-_mt_element.getAttribute = _getAttribute
--- The parser root isn't part of the XML document and doesn't have attributes
+xmlObj._mt_element.getAttribute = _getAttribute
+-- The parser root isn't part of the XML document and doesn't have attributes.
 
 
 --- Find the first child element starting from 'i' with the name 'id'.
@@ -105,19 +96,26 @@ local function _findChild(self, id, i)
 	_assertArgType(1, id, "string")
 	_assertArgNumGE(2, i, 1)
 
-	if i == 1 and #self.children == 0 then
-		return nil
-	end
-
 	for ii = i, #self.children do
 		local child = self.children[ii]
 		if child.name == id then
 			return child, ii
 		end
 	end
+
 	return nil
 end
-_mt_parser_root.findChild = _findChild
-_mt_element.findChild = _findChild
+xmlObj._mt_parser_root.findChild = _findChild
+xmlObj._mt_element.findChild = _findChild
+
+
+--- Convenience method to get text string from a PI or character data table.
+-- @return the contents of 'entity.text'
+local function _getText(self)
+	-- Don't assert 'self'
+	return self.text
+end
+xmlObj._mt_char_data.getText = _getText
+xmlObj._mt_pi.getText = _getText
 
 return xmlObj

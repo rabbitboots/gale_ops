@@ -1,9 +1,8 @@
--- Prerelease -- 2022-03-13
 local path = ... and (...):match("(.-)[^%.]+$") or ""
 
 local stringReader = {
-	_VERSION = "0.9.0", -- prerelease version, packaged with galeOps
-	_URL = "n/a",
+	_VERSION = "1.0.0",
+	_URL = "https://github.com/rabbitboots/string_reader",
 	_DESCRIPTION = "Wrappers for Lua string functions.",
 	_LICENSE = [[
 	Copyright (c) 2022 RBTS
@@ -28,50 +27,39 @@ local stringReader = {
 	]]
 }
 
--- Is the 5.3+ utf8 library available?
-local lua_utf8
-local love = rawget(_G, "love")
---if love then
-if false then
-	lua_utf8 = require("utf8")
-else
-	lua_utf8 = rawget(_G, "utf8")
-end
-
 local dummy_t = {}
 
 local _mt_reader = {}
 _mt_reader.__index = _mt_reader
--- Allow attaching new methods
 stringReader._mt_reader = _mt_reader
 
 -- Assertions
 
-local function errStrBadArg(arg_n, val, expected)
-	return "Bad argument #" .. arg_n .. " (Expected " .. expected .. ", got " .. type(val) .. ")"
+local function _errStrBadArg(arg_n, val, expected)
+	return "bad argument #" .. arg_n .. " (expected " .. expected .. ", got " .. type(val) .. ")"
 end
 
 
 local function _assertArgType(arg_n, val, expected)
 	if type(val) ~= expected then
-		error(errStrBadArg(arg_n, val, expected))
+		error(_errStrBadArg(arg_n, val, expected))
 	end
 end
 
 
 local function _assertArgSeqType(arg_n, seq_n, val, expected)
 	if type(val) ~= expected then
-		error("Argument # " .. arg_n .. ": bad table index #" .. seq_n
-			.. " (Expected " .. expected .. ", got " .. type(val) .. ")")
+		error("argument # " .. arg_n .. ": bad table index #" .. seq_n
+			.. " (expected " .. expected .. ", got " .. type(val) .. ")")
 	end	
 end
 
 
 local function _assertNumGE(arg_n, val, ge)
 	if type(val) ~= "number" then
-		error(errStrBadArg(arg_n, val, "number"), 2)
+		error(_errStrBadArg(arg_n, val, "number"), 2)
 	elseif val < ge then
-		error("Bad argument #" .. arg_n .. ": Number must be at least " .. ge, 2)
+		error("bad argument #" .. arg_n .. ": number must be at least " .. ge, 2)
 	end
 end
 
@@ -79,11 +67,11 @@ end
 -- (Checks the reader object internal state.)
 local function _assertState(str, pos)
 	if type(str) ~= "string" then
-		error("State assertion failure: str is not of type 'string'", 2)
+		error("state assertion failure: str is not of type 'string'", 2)
 	elseif type(pos) ~= "number" then
-		error("State assertion failure: pos is not of type 'number'", 2)
+		error("state assertion failure: pos is not of type 'number'", 2)
 	elseif pos < 1 then
-		error("State assertion failure: pos is lower than string start (1)")
+		error("state assertion failure: pos must be at least 1", 2)
 	end
 	-- 'pos' being beyond #str is considered 'eos'
 end
@@ -92,6 +80,9 @@ end
 
 -- Internal Functions
 
+--- Get the length marker from a UTF-8 code unit's first byte.
+-- @param byte The first byte to check.
+-- @return 1, 2, 3 or 4, or false if the byte was a trailing octet, or nil if it couldn't be interpreted as a UTF-8 byte.
 local function _u8GetOctetLengthMarker(byte)
 	return (byte < 0x80) and 1 -- 0000:0000 - 0111:1111 (ASCII)
 		or (byte >= 0xC0 and byte < 0xE0) and 2 -- 1100:0000 - 1101:1111
@@ -102,30 +93,12 @@ local function _u8GetOctetLengthMarker(byte)
 end
 
 
-local function u8UnitPosition(str, byte_start, byte_pos)
-	local i, count = byte_start, 1
-
-	while true do
-		local byte = string.byte(str, i)
-		if not byte then
-			return false
-		end
-		local code_unit_length = _u8GetOctetLengthMarker(byte)
-		if not code_unit_length then
-			return false
-		end
-		i = i + code_unit_length
-		if i >= byte_pos then
-			break
-		end
-		count = count + 1
+-- Try to determine the line number and character column in 'str' based on the index in 'byte_pos'.
+local function _lineNum(str, byte_pos)
+	if byte_pos > #str then
+		return "(End of string)", "(n/a)"
 	end
 
-	return count
-end
-
-
-local function _lineNum(str, byte_pos)
 	-- March through every code-unit until we either catch up to 'pos'
 	-- or we are unable to parse a code unit.
 	local i, line_num, column = 1, 1, 1
@@ -143,7 +116,16 @@ local function _lineNum(str, byte_pos)
 		if i > byte_pos then
 			break
 		end
-		-- carriage return -- XXX handle LF + CR scenario on Windows
+
+		-- Try to step around the Windows carriage return + line feed pair
+		if byte == 0xd then
+			local byte2 = string.byte(str, i + 1)
+			if byte2 == 0xa then
+				i = i + 1
+			end
+		end
+
+		-- line feed
 		if byte == 0xa then
 			line_num = line_num + 1
 			column = 0
@@ -155,13 +137,44 @@ local function _lineNum(str, byte_pos)
 end
 
 
+local function _getLineInfo(self)
+	if self.hide_line_num then
+		return ""
+	end
+
+	local line_num, char_col
+
+	-- Calling reader state assertions while handling an error risks overruling more
+	-- valuable error messages with generic "bad state" ones.
+	if type(self.str) ~= "string" or type(self.pos) ~= "number" then
+		line_num, char_col = "Unknown (Corrupt reader)", "Unknown"
+
+	else
+		line_num, char_col = _lineNum(self.str, self.pos)
+		-- Couldn't get current line: return unknown
+		if not line_num then
+			line_num, char_col = "(Unknown)", "(Unknown)"
+		end
+	end
+
+	char_col = char_col or "(Unknown)"
+
+	local line_info = "line " .. line_num
+	if not self.hide_char_num then
+		line_info = line_info .. " position " .. char_col
+	end
+
+	return line_info
+end
+
+
 local function _lit(str, pos, chunk)
 	return (string.sub(str, pos, pos + #chunk-1) == chunk)
 end
 
 
-local function _fetch(str, pos, ptn)
-	local i, j = string.find(str, ptn, pos)
+local function _fetch(str, pos, ptn, literal)
+	local i, j = string.find(str, ptn, pos, literal)
 	if i then
 		return j + 1, string.sub(str, i, j)
 	end
@@ -172,7 +185,6 @@ end
 
 local function _cap(str, pos, ptn)
 	local i, j, c1, c2, c3, c4, c5, c6, c7, c8, c9 = string.find(str, ptn, pos)
-	--print("DEBUG: _cap", "i", i, "j", j, "c1-9", c1, c2, c3, c4, c5, c6, c7, c8, c9)
 	if not c1 then
 		return nil
 	end
@@ -206,18 +218,18 @@ function _mt_reader:peek(n, n2)
 	_assertArgType(1, n, "number")
 	_assertArgType(2, n2, "number")
 
-	-- self:peek() == string.sub(self.str, self.pos, self.pos)
-	-- self:peek(1) == string.sub(self.str, self.pos + 1, self.pos + 1)
-	-- self.peek(0, 5) == string.sub(self.str, self.pos, self.pos + 4) -- (reads 5 bytes)
+	-- self:peek() -> string.sub(self.str, self.pos, self.pos)
+	-- self:peek(1) -> string.sub(self.str, self.pos + 1, self.pos + 1)
+	-- self.peek(0, 5) -> string.sub(self.str, self.pos, self.pos + 4) -- (reads 5 bytes)
 
 	return string.sub(self.str, self.pos + n, self.pos + n2)
 end
 
 
---- Try to read one UTF-8 code unit from self.str starting at self.pos. If successful, advance position. If position is eos, return nil. If the current byte is not the start of a valid UTF-8 code unit or is not a UTF-8 valid byte, raise an error.
+--- Try to read one UTF-8 code unit from self.str starting at self.pos. If successful, advance position. If position is eos, return nil. If the current byte is not the start of a valid UTF-8 code unit, or is not a valid UTF-8 byte, raise an error.
 -- @param _guard Internal use, leave nil.
 -- @return String containing the char or code unit, or nil if reached end of string.
-local function _u8Char_plain(self, _guard)
+function _mt_reader.u8Char(self, _guard)
 	_assertState(self.str, self.pos)
 	_assertArgType(1, _guard, "nil")
 	_clearCaptures(self.c)
@@ -239,36 +251,12 @@ local function _u8Char_plain(self, _guard)
 
 	return retval
 end
-_mt_reader.u8Char = _u8Char_plain
-
-
---- Version of self:u8char() that uses the utf8 library in Lua 5.3+.
-local function _u8Char_utf8(self, _guard)
-	_assertState(self.str, self.pos)
-	_assertArgType(1, _guard, "nil")
-	_clearCaptures(self.c)
-
-	-- eos
-	if self.pos > #self.str then
-		return nil
-	end
-
-	local u8_pos2 = lua_utf8.offset(self.str, 2, self.pos)
-	if not u8_pos2 then
-		return nil
-	end
-
-	local retval = string.sub(self.str, self.pos, u8_pos2 - 1)
-	self.pos = u8_pos2
-
-	return retval
-end
 
 
 --- Try to read n UTF-8 code units in self.str, beginning at self.pos. If successful, advance position. If either the starting or final position is eos, return nil. If there is a problem decoding the UTF-8 bytes, raise a Lua error.
 -- @param n (Required) How many code units to read from pos. Must be at least 1.
 -- @return String chunk plus bytes read, or nil if reached end of string.
-local function _u8Chars_plain(self, n)
+function _mt_reader.u8Chars(self, n)
 	_assertState(self.str, self.pos)
 	_assertNumGE(1, n, 1)
 	_clearCaptures(self.c)
@@ -280,18 +268,14 @@ local function _u8Chars_plain(self, n)
 	-- Find the last byte of the last u8Char in the specified range.
 	while true do
 		if u8_count >= n then
-			print("u8_count >= n", u8_count, n)
 			break
 
 		-- eos
 		elseif temp_pos > #self.str then
-			print("temp_pos > #self.str", temp_pos, #self.str, "u8_count", u8_count, "n", n)
 			return nil
 		end
 
 		local u8_len = _u8GetOctetLengthMarker(string.byte(self.str, temp_pos))
-
-		print("u8_len", u8_len, "temp_pos", temp_pos)
 
 		if u8_len == false then
 			error("encoding or parsing error: got trailing octet / continuation byte.")
@@ -309,52 +293,24 @@ local function _u8Chars_plain(self, n)
 
 	return retval, temp_pos - orig_pos
 end
-_mt_reader.u8Chars = _u8Chars_plain
-
-
---- Version of self:u8Chars() that uses the utf8 library in Lua 5.3+.
-local function _u8Chars_utf8(self, n)
-	_assertState(self.str, self.pos)
-	_assertNumGE(1, n, 1)
-	_clearCaptures(self.c)
-
-	local orig_pos = self.pos
-	local u8_count = 0
-
-	-- eos
-	if self.pos > #self.str then
-		return nil
-	end
-
-	-- Find the last byte of the last u8Char in the specified range.
-	local temp_pos = lua_utf8.offset(self.str, n + 1, self.pos)
-	if temp_pos then
-		temp_pos = temp_pos - 1
-	end
-
-	local retval = string.sub(self.str, orig_pos, temp_pos)
-
-	self.pos = temp_pos + 1
-
-	return retval, temp_pos - (orig_pos - 1)
-end
 
 
 --- Try to read a one-byte string from self.str at self.pos. If successful, advance position. If position is eos, return nil.
 -- @param _guard Internal use, must be left nil. Intended to help catch byteChar|byteChars mispellings.
 -- @return String containing the char, or nil if reached end of string.
 function _mt_reader:byteChar(_guard)
-	-- **WARNING**: Only use if you are certain the string contains single-byte code units (ASCII) only.
+	-- **WARNING**: This may return incomplete portions of multi-byte UTF-8 code units.
 	_assertState(self.str, self.pos)
 	_assertArgType(1, _guard, "nil")
 	_clearCaptures(self.c)
-	
+
 	-- eos
 	if self.pos > #self.str then
 		return nil
 	end
 
 	local retval = string.sub(self.str, self.pos, self.pos)
+
 	self.pos = self.pos + 1
 	return retval
 end
@@ -364,7 +320,7 @@ end
 -- @param n (Required) How many bytes to read from pos. Must be at least 1.
 -- @return String chunk plus bytes read, or nil if reached end of string.
 function _mt_reader:byteChars(n)
-	-- **WARNING**: Only use if you are certain the string contains single-byte code units (ASCII) only.
+	-- **WARNING**: This may return incomplete portions of multi-byte UTF-8 code units.
 	_assertState(self.str, self.pos)
 	_assertNumGE(1, n, 1)
 	_clearCaptures(self.c)
@@ -388,6 +344,9 @@ function _mt_reader:byteChars(n)
 end
 
 
+--- Check for 'chunk' anchored to the current position, as a string literal (no pattern matching.) If found, advance position and return the chunk. If not found, stay put and return nil.
+-- @param chunk The string literal to check.
+-- @return the chunk string if found, nil if not.
 function _mt_reader:lit(chunk)
 	_assertState(self.str, self.pos)
 	_assertArgType(1, chunk, "string")
@@ -401,7 +360,10 @@ function _mt_reader:lit(chunk)
 	return nil
 end
 
-
+--- Version of self:lit() that raises an error if the match isn't successful.
+-- @param chunk The string literal to check.
+-- @param err_reason (Optional) An error message to pass to the error handler, if the search was not successful.
+-- @return the chunk string, if found. If not, raises an error.
 function _mt_reader:litReq(chunk, err_reason)
 	local retval = self:lit(chunk)
 	if not retval then
@@ -413,43 +375,19 @@ function _mt_reader:litReq(chunk, err_reason)
 end
 
 
-function _mt_reader:litTab(chunk_t)
-	_assertState(self.str, self.pos)
-
-	for i = 1, #chunk_t do
-		local chunk = chunk_t[i]
-		_assertArgSeqType(1, i, chunk, "string")
-
-		if _lit(self.str, self.pos, chunk) then
-
-			self.pos = self.pos + #chunk
-			return i, chunk
-		end
-	end
-
-	return nil
-end
-
-
-function _mt_reader:litTabReq(chunk_t, err_reason)
-	local ret_i, retval = self:litTab(chunk_t)
-	if not retval then
-		err_reason = err_reason or "litTabReq failed"
-		self:errorHalt(err_reason)
-	end
-
-	return ret_i, retval
-end
-
-
-function _mt_reader:fetch(ptn)
+--- Search for 'ptn' starting at the current position.
+-- @param ptn The string pattern to find.
+-- @param literal (Default: false) When true, conducts a "plain" search with no magic pattern tokens. (Unlike self:lit(), this is not anchored to the current position.)
+-- @return The successful string match, or nil if the search failed.
+function _mt_reader:fetch(ptn, literal)
 	_assertState(self.str, self.pos)
 	_assertArgType(1, ptn, "string")
+	literal = literal ~= nil and literal or false
+	_assertArgType(2, literal, "boolean")
 	_clearCaptures(self.c)
 
-	local new_pos, chunk = _fetch(self.str, self.pos, ptn)
+	local new_pos, chunk = _fetch(self.str, self.pos, ptn, literal)
 	if new_pos then
-
 		self.pos = new_pos
 		return chunk
 	end
@@ -458,17 +396,13 @@ function _mt_reader:fetch(ptn)
 end
 
 
-function _mt_reader:fetchOrEOS(ptn)
-	local chunk = self:fetch(ptn)
-	if not chunk then
-		self.pos = math.max(self.pos, #self.str + 1)
-	end
-	return chunk
-end
-
-
-function _mt_reader:fetchReq(ptn, err_reason)
-	local chunk = self:fetch(ptn)
+--- Version of self:fetch() which raises an error if the pattern search failed.
+-- @param ptn The string pattern to find.
+-- @param literal (Default: false) When true, conducts a "plain" search with no magic pattern tokens. (Unlike self:lit(), this is not anchored to the current position.)
+-- @param err_reason (Optional) An error message that can be passed to the error handler there wasn't a match.
+-- @return The pattern match substring on success. On failure, raise a Lua error.
+function _mt_reader:fetchReq(ptn, literal, err_reason)
+	local chunk = self:fetch(ptn, literal)
 	if not chunk then
 		err_reason = err_reason or "fetch failed"
 		self:errorHalt(err_reason)
@@ -477,13 +411,16 @@ function _mt_reader:fetchReq(ptn, err_reason)
 end
 
 
--- Try to get string captures. If successful, advance position.
--- @param ... One or multiple string patterns with capture definitions. Lua supports up to nine captures per string search. Patterns are tried in sequence until either one is successful or they all fail.
--- @return 1-9 capture strings from the successful pattern match, or nil if no patterns were found.
+--- Search for a string pattern containing capture definitions. If the first capture was successful, assign the capture results to an internal table, advance position, and return true. If false, clear existing captures and return false.
+-- @param ptn A string pattern with at least one capture definition. Lua supports up to nine captures per string search. 
+-- @return true on successful pattern match, nil if the pattern match failed. Successful captures can be read in 'self.c[1..9]'.
 function _mt_reader:cap(ptn)
 	_assertState(self.str, self.pos)
 	_assertArgType(1, ptn, "string")
 	_clearCaptures(self.c)
+
+	-- The reason for storing captures and not returning them directly is so that you
+	-- can include self:cap() in an if/elseif/else chain.
 
 	local new_pos, c1, c2, c3, c4, c5, c6, c7, c8, c9 = _cap(self.str, self.pos, ptn)
 	if c1 then
@@ -497,6 +434,10 @@ function _mt_reader:cap(ptn)
 end
 
 
+--- A version of self:cap() which raises an error if the match was unsuccessful.
+-- @param ptn A string pattern with at least one capture definition. Lua supports up to nine captures per string search. 
+-- @param err_reason (Optional) An error message that can be passed to the error handler there wasn't a match.
+-- @return Nothing. Successful captures can be read in 'self.c[1..9]'. On failure, raises a Lua error.
 function _mt_reader:capReq(ptn, err_reason)
 	local success = self:cap(ptn)
 	if not success then
@@ -504,48 +445,15 @@ function _mt_reader:capReq(ptn, err_reason)
 		self:errorHalt(err_reason)
 	end
 end
-	
-
-function _mt_reader:capTab(ptn_t)
-	_assertState(self.str, self.pos)
-	_assertArgType(1, ptn_t, "table")
-	_clearCaptures(self.c)
-
-	for selection = 1, #ptn_t do
-		local ptn = ptn_t[selection]
-		_assertArgSeqType(1, selection, ptn, "string")
-		local new_pos, c1, c2, c3, c4, c5, c6, c7, c8, c9 = _cap(self.str, self.pos, ptn)
-
-		if c1 then
-			self.pos = new_pos
-
-			local c = self.c
-			c[1], c[2], c[3], c[4], c[5], c[6], c[7], c[8], c[9] = c1, c2, c3, c4, c5, c6, c7, c8, c9
-			return selection
-		end
-	end
-
-	return nil
-end
 
 
-function _mt_reader:capTabReq(ptn_t, err_reason)
-	local selection, c1, c2, c3, c4, c5, c6, c7, c8, c9 = self:capTab(ptn_t)
-	if not selection then
-		err_reason = err_reason or "capTabReq failed"
-		self:errorHalt(err_reason)
-	end
-	return selection
-end
-
-
--- Step over optional whitespace. Return true if the position advanced, false if not.
+--- Step over optional whitespace.
+-- @return true if the position advanced, false if not.
 function _mt_reader:ws()
 	_assertState(self.str, self.pos)
 	_clearCaptures(self.c)
 
 	local old_pos = self.pos
-
 	local i, j = string.find(self.str, "%S", self.pos)
 
 	if not i then -- marched to eos
@@ -558,7 +466,9 @@ function _mt_reader:ws()
 end
 
 
--- Pass over mandatory whitespace, raising an error if none is encountered.
+--- Pass over mandatory whitespace, raising an error if none is encountered.
+-- @param err_reason (Optional) An error message that can be passed to the error handler there wasn't a match.
+-- @return Nothing.
 function _mt_reader:wsReq(err_reason)
 	_assertState(self.str, self.pos)
 	_clearCaptures(self.c)
@@ -617,6 +527,9 @@ function _mt_reader:reset()
 	self.pos = 1
 end
 
+
+--- Manually clear stored captures. (Most methods do this automatically as a first step.)
+-- @return nothing.
 function _mt_reader:clearCaptures()
 	_clearCaptures(self.c)
 end
@@ -629,6 +542,9 @@ function _mt_reader:isEOS()
 	return self.pos > #self.str
 end
 
+
+--- Move the reader position to the end of the string. (#self.str + 1)
+-- @return nothing.
 function _mt_reader:goEOS()
 	_assertState(self.str, self.pos)
 	self.pos = #self.str + 1
@@ -638,28 +554,11 @@ end
 
 -- Reader Methods: Util
 
---- Get the current line number. Line start is determined by the number of line-breaks from byte 1 to (self.pos - 1).
+--- Get the current line number. Line start is determined by the number of line feed characters from byte 1 to (self.pos - 1).
 -- @return Count of newlines, or "(End of String)" if position is out of bounds.
 function _mt_reader:lineNum()
 	_assertState(self.str, self.pos)
 	return _lineNum(self.str, self.pos)
-end
-
-
-local function _getLineInfo(self)
-	local line_num, char_col
-	-- Calling reader state assertions while handling an error risks overruling more
-	-- valuable error messages with generic "bad state" ones.
-	if type(self.str) ~= "string" or type(self.pos) ~= "number" then
-		line_num = "Unknown (Corrupt reader)"
-
-	else
-		line_num, char_col = _lineNum(self.str, self.pos)
-		if not line_num then
-			line_num = "(Unknown)"
-		end
-	end
-	return line_num, char_col
 end
 
 
@@ -670,16 +569,7 @@ function _mt_reader:warn(warn_str)
 		return
 	end
 
-	local line_info
-	if self.hide_line_num then
-		line_info = "", ""
-
-	else
-		local line_num, char_col = _getLineInfo(self)
-		line_info = "Line " .. line_num .. ", Position: " .. char_col .. ": "
-	end
-
-	print(line_info .. warn_str)
+	print(_getLineInfo(self) .. ": " .. warn_str)
 end
 
 
@@ -691,24 +581,14 @@ function _mt_reader:errorHalt(err_str, err_level)
 		error("Parsing failed.")
 	end
 
-	err_level = err_level or 2
+	err_level = err_level ~= nil and err_level or 2
+
 	-- error() would normally catch a bad arg #1, but we may need to concatenate this to the line and char numbers.
 	if type(err_str) ~= "string" then
 		err_str = "(err_str is a " .. type(err_str) .. " object)"
 	end
 
-	local line_info, column
-	if self.hide_line_num then
-		line_info = ""
-
-	else
-		local line_num, column = _getLineInfo(self)
-		column = column or "(Unknown)"
-
-		line_info = "Line " .. line_num .. ", Position: " .. column .. ": "
-	end
-
-	error(line_info .. err_str, err_level)
+	error(_getLineInfo(self) .. ": " .. err_str, err_level)
 end
 
 -- / Reader Methods: Util
@@ -734,9 +614,9 @@ function stringReader.new(str, opts)
 
 	-- Omits line number from error messages
 	self.hide_line_num = opts.hide_line_num or false
-
+	self.hide_char_num = opts.hide_char_num or false -- 'hide_line_num == true' overrides this
 	-- Replaces all error messages with "Parsing failed", and silences warnings.
-	-- This also hides the line number.
+	-- This also hides the line number and character number.
 	self.terse_errors = opts.terse_errors or false
 
 	-- Capture results 1-9
@@ -756,24 +636,12 @@ function stringReader.lineNum(str, pos)
 end
 
 
-local function _setModuleFunctions()
-	if lua_utf8 then
-		_mt_reader.u8Char = _u8Char_utf8
-		_mt_reader.u8Chars = _u8Chars_utf8
-	else
-		_mt_reader.u8Char = _u8Char_plain
-		_mt_reader.u8Chars = _u8Chars_plain
-	end
-end
-
-
 -- / Public Functions
 
 -- Debug
--- [=====[
 
 -- Uncomment the next block to enable the '_status()' debug method.
--- [====[
+--[[
 
 --- Debug: Print the current character (byte) and position.
 -- @param show_captures (Optional) If true, show current state of the reader's capture registers.
@@ -796,22 +664,15 @@ function _mt_reader:_status(show_captures)
 	if show_captures then
 		io.write("cap registers:")
 		for i = 1, #self.c do
-			io.write("\t" .. tostring(self.c[i]))
+			io.write("\t" .. i .. ": " .. tostring(self.c[i]))
 		end
 	end
 
 	io.flush()
 end
---]====]
+--]]
 
 -- / Debug
---]=====]
-
--- Module Init
-
-_setModuleFunctions()
-
--- / Module Init
 
 return stringReader
 

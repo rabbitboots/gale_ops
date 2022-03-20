@@ -1,4 +1,3 @@
--- Prerelease -- 2022-03-13
 --local path = ... and (...):match("(.-)[^%.]+$") or ""
 
 -- Shared functions for xmlToTable submodules.

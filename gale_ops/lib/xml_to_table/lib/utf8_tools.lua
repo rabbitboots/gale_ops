@@ -1,9 +1,8 @@
--- Prerelease -- 2022-03-13
 --local path = ... and (...):match("(.-)[^%.]+$") or ""
 local utf8Tools = {
-	_VERSION = "0.7.2", -- prerelease version, packaged with galeOps
-	--_URL = "n/a: pending initial release",
-	_DESCRIPTION = "UTF-8 utility functions.",
+	_VERSION = "1.0.0",
+	_URL = "https://github.com/rabbitboots/utf8_tools",
+	_DESCRIPTION = "UTF-8 utility functions for Lua.",
 	_LICENSE = [[
 	Copyright (c) 2022 RBTS
 
@@ -28,16 +27,6 @@ local utf8Tools = {
 }
 
 --[[
-	Notes:
-
-	* Lua 5.1 (LuaJIT 2.1) and Lua 5.2+ use different string pattern identifiers for zero-byte (Nul) chars. As such,
-	certain patterns need to be slightly different depending on the version of Lua being used.
-
-	* This module does not handle the Unicode byte order mark (BOM) U+FEFF (UTF-8 EF BB BF.) Though it has no practical
-	use in UTF-8 (and is discouraged), it may still appear at the beginning of a UTF-8-encoded document.
-
-	* This module should work with strict.lua active.
-
 	References:
 	UTF-8 RFC 3629:
 	https://tools.ietf.org/html/rfc3629
@@ -72,9 +61,9 @@ end
 --[[
 	Here are some Lua string patterns which can be used to parse UTF-8 code units.
 
-	charpattern: This is a pattern from Lua 5.3's utf8 library which matches exactly
-		one UTF-8 code unit. It assumes the string being parsed is valid UTF-8.
-		(It can match overly long code units.)
+	charpattern: This is a (slightly modified) pattern from Lua 5.3's utf8 library
+		which matches exactly one UTF-8 code unit. It assumes the string being parsed
+		is valid UTF-8. (It can match overly long code units.)
 		Source: http://www.lua.org/manual/5.3/manual.html#6.5
 
 	u8_ptn_t: Table of patterns used to grab UTF-8 code units in getCodeUnit(). All
@@ -87,61 +76,25 @@ end
 		and could be used to skip to the next code unit in a string, without failing
 		on further issues in the subsequent bytes.
 
-	nul_byte: Matches a zero-byte (binary 0000:0000).
 --]]
 
-utf8Tools.patterns = {
-	lua_5_1 = {
-		charpattern = "[%z\1-\x7F\xC2-\xFD][\x80-\xBF]*",
-		u8_ptn_t = {
-			"^([%z\1-\x7F])",
-			"^([\xC0-\xDF])([\x80-\xBF])",
-			"^([\xE0-\xEF])([\x80-\xBF])([\x80-\xBF])",
-			"^([\xF0-\xF7])([\x80-\xBF])([\x80-\xBF])([\x80-\xBF])",
-		},
-		u8_ptn_excl_t = {
-			"^[%z\1-\x7F]",
-			"^[\xC2-\xDF][\x80-\xBF]",
-			"^[\xE0-\xEF][\x80-\xBF][\x80-\xBF]",
-			"^[\xF0-\xF4][\x80-\xBF][\x80-\xBF][\x80-\xBF]",
-		},
-		u8_oct_1 = "[%z\1-\x7F\xC2-\xFD]",
-		nul_byte = "%z",
-	},
-	lua_5_2 = {
-		charpattern = "[\0-\x7F\xC2-\xFD][\x80-\xBF]*",
-		u8_ptn_t = {
-			"^([\0-\x7F])",
-			"^([\xC0-\xDF])([\x80-\xBF])",
-			"^([\xE0-\xEF])([\x80-\xBF])([\x80-\xBF])",
-			"^([\xF0-\xF7])([\x80-\xBF])([\x80-\xBF])([\x80-\xBF])",
-		},
-		u8_ptn_excl_t = {
-			"^[\0-\x7F]",
-			"^[\xC2-\xDF][\x80-\xBF]",
-			"^[\xE0-\xEF][\x80-\xBF][\x80-\xBF]",
-			"^[\xF0-\xF4][\x80-\xBF][\x80-\xBF][\x80-\xBF]",
-		},
-		u8_oct_1 = "[\0-\x7F\xC2-\xFD]",
-		nul_byte = "\0",
-	},
+utf8Tools.charpattern = "[%z\x01-\x7F\xC2-\xFD][\x80-\xBF]*"
+
+utf8Tools.u8_oct_1 = "[%z\x01-\x7F\xC2-\xFD]"
+
+utf8Tools.u8_ptn_t = {
+	"^[%z\x01-\x7F]",
+	"^[\xC0-\xDF][\x80-\xBF]",
+	"^[\xE0-\xEF][\x80-\xBF][\x80-\xBF]",
+	"^[\xF0-\xF7][\x80-\xBF][\x80-\xBF][\x80-\xBF]",
 }
 
-
-local function _setPatterns(tbl)
-	utf8Tools.charpattern = tbl.charpattern
-	utf8Tools.u8_ptn_t = tbl.u8_ptn_t
-	utf8Tools.u8_ptn_excl_t = tbl.u8_ptn_excl_t
-	utf8Tools.u8_oct_1 = tbl.u8_oct_1
-	utf8Tools.nul_byte = tbl.nul_byte
-end
-
-if _VERSION == "Lua 5.1" then
-	_setPatterns(utf8Tools.patterns.lua_5_1)
-
-else
-	_setPatterns(utf8Tools.patterns.lua_5_2)
-end
+utf8Tools.u8_ptn_excl_t = {
+	"^[%z\x01-\x7F]",
+	"^[\xC2-\xDF][\x80-\xBF]",
+	"^[\xE0-\xEF][\x80-\xBF][\x80-\xBF]",
+	"^[\xF0-\xF4][\x80-\xBF][\x80-\xBF][\x80-\xBF]",
+}
 
 
 -- Octets 0xc0, 0xc1, and (0xf5 - 0xff) should never appear in a UTF-8 value
@@ -172,7 +125,7 @@ local function _assertArgType(arg_n, var, expected)
 	end
 end
 
-local function errStrInvalidOctet(pos, val)
+local function _errStrInvalidOctet(pos, val)
 	return "Invalid octet value (" .. val .. ") in byte #" .. pos
 end
 
@@ -182,7 +135,7 @@ end
 -- Internal Logic
 
 -- Check octets 2-4 in a multi-octet code point
-local function checkFollowingOctet(octet, position, n_octets)
+local function _checkFollowingOctet(octet, position, n_octets)
 	-- NOTE: Do not call on the first octet.
 
 	if not octet then
@@ -190,7 +143,7 @@ local function checkFollowingOctet(octet, position, n_octets)
 
 	-- Check some bytes which are prohibited in any position in a UTF-8 code point
 	elseif utf8Tools.lut_invalid_octet[octet] then
-		return errStrInvalidOctet(position, octet)
+		return _errStrInvalidOctet(position, octet)
 
 	-- Nul is allowed in single-octet code points, but not multi-octet
 	elseif octet == 0 then
@@ -280,7 +233,7 @@ local function _checkCodeUnitIssue(str, pos)
 
 	-- Check octet 1 against some bytes which are prohibited in any position in a UTF-8 code point
 	if utf8Tools.lut_invalid_octet[b1] then
-		return false, errStrInvalidOctet(1, b1)
+		return false, _errStrInvalidOctet(1, b1)
 	end
 
 	local err_str
@@ -290,22 +243,22 @@ local function _checkCodeUnitIssue(str, pos)
 	if u8_len == 2 then
 		b2 = string.byte(str, pos+1)
 
-		err_str = checkFollowingOctet(b2, 2, u8_len); if err_str then return false, err_str; end
+		err_str = _checkFollowingOctet(b2, 2, u8_len); if err_str then return false, err_str; end
 
 	-- Three bytes
 	elseif u8_len == 3 then
 		b2, b3 = string.byte(str, pos+1, pos+2)
 
-		err_str = checkFollowingOctet(b2, 2, u8_len); if err_str then return false, err_str; end
-		err_str = checkFollowingOctet(b3, 3, u8_len); if err_str then return false, err_str; end
+		err_str = _checkFollowingOctet(b2, 2, u8_len); if err_str then return false, err_str; end
+		err_str = _checkFollowingOctet(b3, 3, u8_len); if err_str then return false, err_str; end
 
 	-- Four bytes
 	elseif u8_len == 4 then
 		b2, b3, b4 = string.byte(str, pos+1, pos+3)
 
-		err_str = checkFollowingOctet(b2, 2, u8_len); if err_str then return false, err_str; end
-		err_str = checkFollowingOctet(b3, 3, u8_len); if err_str then return false, err_str; end
-		err_str = checkFollowingOctet(b4, 4, u8_len); if err_str then return false, err_str; end
+		err_str = _checkFollowingOctet(b2, 2, u8_len); if err_str then return false, err_str; end
+		err_str = _checkFollowingOctet(b3, 3, u8_len); if err_str then return false, err_str; end
+		err_str = _checkFollowingOctet(b4, 4, u8_len); if err_str then return false, err_str; end
 	end
 
 	-- Need to check some more prohibited values
@@ -363,6 +316,10 @@ end
 
 -- Public Functions -- Main Interface
 
+--- Get a UTF-8 code unit from a string at a specific byte-position.
+-- @param str The string to examine.
+-- @param pos The starting byte-position of the code unit in the string.
+-- @return The code unit, as a string, or nil + error string if unable to get a valid UTF-8 code unit.
 function utf8Tools.getCodeUnit(str, pos)
 	_assertArgType(1, str, "string")
 	_assertArgType(2, pos, "number")
@@ -427,13 +384,13 @@ end
 --- Scan a string for bytes that are forbidden by the UTF-8 spec. (see: lut_invalid_octet)
 -- @param str The string to check.
 -- @return Index and value of the first bad byte encountered, or nil if none found.
-function utf8Tools.hasInvalidBytes(str)
+function utf8Tools.invalidByteCheck(str)
 	_assertArgType(1, str, "string")
 
 	for i = 1, #str do
 		local bad_byte = utf8Tools.lut_invalid_octet[string.byte(str, i)]
 		if bad_byte then
-			return i, bad_byte
+			return i, string.byte(str, i)
 		end
 	end
 
@@ -444,7 +401,7 @@ end
 --- Scan a string for malformed UTF-8 code units (forbidden bytes[*1], code points in the surrogate range[*2], and
 --  mismatch between length marker and number of bytes.)
 --  [*1] 'options.match_exclude' must be true.
---	[*2] 'options.check_surrogates' must be true.
+--  [*2] 'options.check_surrogates' must be true.
 -- @param str The string to check.
 -- @return Index, plus a string which attempts to diagnose the issue, or nil if no malformed code units were found.
 function utf8Tools.hasMalformedCodeUnits(str)
@@ -480,7 +437,7 @@ function utf8Tools.u8UnitToCodePoint(unit_str)
 	local ok, err = _checkCodeUnitIssue(unit_str, 1)
 
 	local code_point = _numberFromOctets(#unit_str, string.byte(unit_str, 1, 4))
-	
+
 	-- (No point in error-checking the code point if a problem was found with the code unit.)
 	if err == nil then
 		local _
